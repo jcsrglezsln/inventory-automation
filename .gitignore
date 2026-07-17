@@ -1,0 +1,20 @@
+# PowerShell
+*.ps1xml
+*.pssc
+*.psrc
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# CSV temporales
+*.tmp
+
+# Archivos del sistema
+Thumbs.db
+Desktop.ini
+
+# Windows
+$RECYCLE.BIN/
