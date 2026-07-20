@@ -18,37 +18,56 @@
 
 function Get-ComputerInfoData {
 
-    $computer = Get-CimInstance Win32_ComputerSystem
-    $bios     = Get-CimInstance Win32_BIOS
-    $cpu      = Get-CimInstance Win32_Processor
-    $os       = Get-CimInstance Win32_OperatingSystem
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+    )
+
+    $computer = Get-CimInstance Win32_ComputerSystem -CimSession $CimSession
+    $bios     = Get-CimInstance Win32_BIOS -CimSession $CimSession
+    $cpu      = Get-CimInstance Win32_Processor -CimSession $CimSession
+    $os       = Get-CimInstance Win32_OperatingSystem -CimSession $CimSession
 
     [PSCustomObject]@{
 
-        ComputerName = $env:COMPUTERNAME
-        CurrentUser  = $env:USERNAME
+        ComputerName = $computer.Name
+        CurrentUser = $computer.UserName
         Manufacturer = $computer.Manufacturer
-        Model        = $computer.Model
+        Model = $computer.Model
         SerialNumber = $bios.SerialNumber
-        BIOSVersion  = $bios.SMBIOSBIOSVersion
-        Processor    = $cpu.Name
-        RAM_GB       = [math]::Round($computer.TotalPhysicalMemory /1GB,2)
+        BIOSVersion = $bios.SMBIOSBIOSVersion
+        Processor = $cpu.Name
+        RAM_GB = [math]::Round($computer.TotalPhysicalMemory /1GB,2)
         OperatingSystem = $os.Caption
-        Version      = $os.Version
-        Build        = $os.BuildNumber
+        Version = $os.Version
+        Build = $os.BuildNumber
 
     }
 
 }
 
+
 function Get-DiskInfo {
 
-    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+    )
+
+    $disk = Get-CimInstance `
+        Win32_LogicalDisk `
+        -CimSession $CimSession `
+        -Filter "DeviceID='C:'"
 
     [PSCustomObject]@{
 
-        DiskSize_GB  = [math]::Round($disk.Size/1GB,2)
+        DiskSize_GB = [math]::Round($disk.Size/1GB,2)
+
         FreeSpace_GB = [math]::Round($disk.FreeSpace/1GB,2)
+
+        UsedSpace_GB = [math]::Round(($disk.Size-$disk.FreeSpace)/1GB,2)
+
+        FreePercent = [math]::Round(($disk.FreeSpace/$disk.Size)*100,2)
 
     }
 
@@ -56,66 +75,80 @@ function Get-DiskInfo {
 
 function Get-NetworkInfo {
 
-    $adapter = Get-NetAdapter |
-        Where-Object Status -eq "Up" |
-        Select-Object -First 1
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+    )
 
-    $ip = Get-NetIPAddress `
-        -InterfaceIndex $adapter.InterfaceIndex `
-        -AddressFamily IPv4 |
-        Where-Object IPAddress -notlike "169.*" |
+    $adapter = Get-CimInstance `
+        Win32_NetworkAdapterConfiguration `
+        -CimSession $CimSession |
+        Where-Object IPEnabled |
         Select-Object -First 1
 
     [PSCustomObject]@{
 
-        IPv4 = $ip.IPAddress
-        MAC  = $adapter.MacAddress
+        IPv4 = ($adapter.IPAddress |
+            Where-Object {$_ -match '^\d+\.'} |
+            Select-Object -First 1)
+
+        MAC = $adapter.MACAddress
+
+        DHCP = $adapter.DHCPEnabled
+
+        Gateway = ($adapter.DefaultIPGateway -join ",")
+
+        DNS = ($adapter.DNSServerSearchOrder -join ",")
 
     }
 
 }
+
 
 function Get-SecurityInfo {
 
-    try{
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+    )
 
-        $bitlocker = Get-BitLockerVolume -MountPoint "C:"
+    $Computer = $CimSession.ComputerName
 
-        if($bitlocker.ProtectionStatus -eq 1){
+    $BitLocker = Invoke-Command -ComputerName $Computer {
 
-            $BitLockerStatus = "Enabled"
+        try{
+
+            (Get-BitLockerVolume -MountPoint "C:").ProtectionStatus
 
         }
-        else{
+        catch{
 
-            $BitLockerStatus = "Disabled"
+            $null
 
         }
 
     }
 
-    catch{
+    $Defender = Invoke-Command -ComputerName $Computer {
 
-        $BitLockerStatus = "Unavailable"
+        try{
 
-    }
+            (Get-MpComputerStatus).AntivirusEnabled
 
-    try{
+        }
+        catch{
 
-        $Defender = (Get-MpComputerStatus).AntivirusEnabled
+            $null
 
-    }
-
-    catch{
-
-        $Defender = "Unavailable"
+        }
 
     }
 
     [PSCustomObject]@{
 
-        BitLocker = $BitLockerStatus
-        Defender  = $Defender
+        BitLocker = $BitLocker
+
+        Defender = $Defender
 
     }
 
@@ -124,39 +157,120 @@ function Get-SecurityInfo {
 
 
 
-$ComputerInfo = Get-ComputerInfoData
-$DiskInfo     = Get-DiskInfo
-$NetworkInfo  = Get-NetworkInfo
-$SecurityInfo = Get-SecurityInfo
+function Get-ComputerInventory {
 
+    <#
+    .SYNOPSIS
+        Collects complete inventory information from a computer.
 
-$Inventory = [PSCustomObject]@{
+    .DESCRIPTION
+        Combines hardware, disk, network and security information
+        into a single PowerShell object.
 
-    ComputerName = $ComputerInfo.ComputerName
-    CurrentUser  = $ComputerInfo.CurrentUser
-    Manufacturer = $ComputerInfo.Manufacturer
-    Model        = $ComputerInfo.Model
-    SerialNumber = $ComputerInfo.SerialNumber
-    BIOSVersion  = $ComputerInfo.BIOSVersion
-    Processor    = $ComputerInfo.Processor
-    RAM_GB       = $ComputerInfo.RAM_GB
-    OperatingSystem = $ComputerInfo.OperatingSystem
-    Version      = $ComputerInfo.Version
-    Build        = $ComputerInfo.Build
+    .PARAMETER CimSession
+        Active CIM Session.
 
-    DiskSize_GB  = $DiskInfo.DiskSize_GB
-    FreeSpace_GB = $DiskInfo.FreeSpace_GB
+    .OUTPUTS
+        PSCustomObject
+    #>
 
-    IPv4         = $NetworkInfo.IPv4
-    MAC          = $NetworkInfo.MAC
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+    )
 
-    BitLocker    = $SecurityInfo.BitLocker
-    Defender     = $SecurityInfo.Defender
+    $Computer = Get-ComputerInfoData -CimSession $CimSession
+    $Disk     = Get-DiskInfo -CimSession $CimSession
+    $Network  = Get-NetworkInfo -CimSession $CimSession
+    $Security = Get-SecurityInfo -CimSession $CimSession
 
-    InventoryDate = Get-Date
+    [PSCustomObject]@{
+
+        # Computer Information
+        ComputerName    = $Computer.ComputerName
+        CurrentUser     = $Computer.CurrentUser
+        Manufacturer    = $Computer.Manufacturer
+        Model           = $Computer.Model
+        SerialNumber    = $Computer.SerialNumber
+        BIOSVersion     = $Computer.BIOSVersion
+        Processor       = $Computer.Processor
+        RAM_GB          = $Computer.RAM_GB
+        OperatingSystem = $Computer.OperatingSystem
+        Version         = $Computer.Version
+        Build           = $Computer.Build
+
+        # Disk Information
+        DiskSize_GB     = $Disk.DiskSize_GB
+        UsedSpace_GB    = $Disk.UsedSpace_GB
+        FreeSpace_GB    = $Disk.FreeSpace_GB
+        FreePercent     = $Disk.FreePercent
+
+        # Network Information
+        IPv4            = $Network.IPv4
+        MAC             = $Network.MAC
+        DHCP            = $Network.DHCP
+        Gateway         = $Network.Gateway
+        DNS             = $Network.DNS
+
+        # Security Information
+        BitLocker       = $Security.BitLocker
+        Defender        = $Security.Defender
+
+        # Inventory Information
+        InventoryDate   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    }
 
 }
 
 
-$Inventory | Export-Csv ".\InventoryReport.csv" -NoTypeInformation -Encoding UTF8
+$OnlineComputers = @(
+    $env:COMPUTERNAME
+)
 
+
+$Results = @()
+
+foreach ($Computer in $OnlineComputers) {
+
+    $Session = $null
+
+    try {
+
+        $Session = New-CimSession -ComputerName $Computer
+
+        $Results += Get-ComputerInventory -CimSession $Session
+
+        Write-Host "[OK] $Computer" -ForegroundColor Green
+
+    }
+    catch {
+
+        Write-Warning "[ERROR] $Computer : $($_.Exception.Message)"
+
+    }
+    finally {
+
+        if ($Session) {
+            Remove-CimSession $Session
+        }
+
+    }
+
+}
+
+
+if (!(Test-Path ".\Reports")) {
+
+    New-Item `
+        -ItemType Directory `
+        -Path ".\Reports" | Out-Null
+
+}
+
+$Results | Export-Csv `
+    ".\Reports\Inventory.csv" `
+    -NoTypeInformation `
+    -Encoding UTF8
+
+    
