@@ -1,3 +1,21 @@
+<#
+.SYNOPSIS
+    Inventory Automation Script
+
+.DESCRIPTION
+    Collects Windows hardware and operating system information
+    and exports the results to a CSV file.
+
+.AUTHOR
+    Julio César González Salgado
+
+.VERSION
+    1.0.0
+
+.LASTUPDATED
+    2026-07-20
+#>
+
 function Get-ComputerInfoData {
 
     $computer = Get-CimInstance Win32_ComputerSystem
