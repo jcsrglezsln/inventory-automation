@@ -246,7 +246,12 @@ foreach ($Computer in $OnlineComputers) {
     }
     catch {
 
-        Write-Warning "[ERROR] $Computer : $($_.Exception.Message)"
+       Write-Warning "[ERROR] $Computer : $($_.Exception.Message)"
+
+        Add-Content `
+        ".\Reports\Errors.log" `
+        "$(Get-Date) - $Computer - $($_.Exception.Message)"
+        
 
     }
     finally {
