@@ -19,28 +19,39 @@
 function Get-ComputerInfoData {
 
     param(
-        [Parameter(Mandatory)]
         [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
-    $computer = Get-CimInstance Win32_ComputerSystem -CimSession $CimSession
-    $bios     = Get-CimInstance Win32_BIOS -CimSession $CimSession
-    $cpu      = Get-CimInstance Win32_Processor -CimSession $CimSession
-    $os       = Get-CimInstance Win32_OperatingSystem -CimSession $CimSession
+    if ($CimSession) {
+
+        $computer = Get-CimInstance Win32_ComputerSystem -CimSession $CimSession
+        $bios     = Get-CimInstance Win32_BIOS -CimSession $CimSession
+        $cpu      = Get-CimInstance Win32_Processor -CimSession $CimSession
+        $os       = Get-CimInstance Win32_OperatingSystem -CimSession $CimSession
+
+    }
+    else {
+
+        $computer = Get-CimInstance Win32_ComputerSystem
+        $bios     = Get-CimInstance Win32_BIOS
+        $cpu      = Get-CimInstance Win32_Processor
+        $os       = Get-CimInstance Win32_OperatingSystem
+
+    }
 
     [PSCustomObject]@{
 
-        ComputerName = $computer.Name
-        CurrentUser = $computer.UserName
-        Manufacturer = $computer.Manufacturer
-        Model = $computer.Model
-        SerialNumber = $bios.SerialNumber
-        BIOSVersion = $bios.SMBIOSBIOSVersion
-        Processor = $cpu.Name
-        RAM_GB = [math]::Round($computer.TotalPhysicalMemory /1GB,2)
+        ComputerName    = $computer.Name
+        CurrentUser     = $computer.UserName
+        Manufacturer    = $computer.Manufacturer
+        Model           = $computer.Model
+        SerialNumber    = $bios.SerialNumber
+        BIOSVersion     = $bios.SMBIOSBIOSVersion
+        Processor       = $cpu.Name
+        RAM_GB          = [math]::Round($computer.TotalPhysicalMemory /1GB,2)
         OperatingSystem = $os.Caption
-        Version = $os.Version
-        Build = $os.BuildNumber
+        Version         = $os.Version
+        Build           = $os.BuildNumber
 
     }
 
@@ -50,46 +61,70 @@ function Get-ComputerInfoData {
 function Get-DiskInfo {
 
     param(
-        [Parameter(Mandatory)]
         [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
-    $disk = Get-CimInstance `
-        Win32_LogicalDisk `
-        -CimSession $CimSession `
-        -Filter "DeviceID='C:'"
+    if ($CimSession) {
+
+        $disk = Get-CimInstance `
+            Win32_LogicalDisk `
+            -CimSession $CimSession `
+            -Filter "DeviceID='C:'"
+
+    }
+    else {
+
+        $disk = Get-CimInstance `
+            Win32_LogicalDisk `
+            -Filter "DeviceID='C:'"
+
+    }
 
     [PSCustomObject]@{
 
-        DiskSize_GB = [math]::Round($disk.Size/1GB,2)
-
-        FreeSpace_GB = [math]::Round($disk.FreeSpace/1GB,2)
-
-        UsedSpace_GB = [math]::Round(($disk.Size-$disk.FreeSpace)/1GB,2)
-
-        FreePercent = [math]::Round(($disk.FreeSpace/$disk.Size)*100,2)
+        DiskSize_GB  = [math]::Round($disk.Size / 1GB, 2)
+        FreeSpace_GB = [math]::Round($disk.FreeSpace / 1GB, 2)
+        UsedSpace_GB = [math]::Round(($disk.Size - $disk.FreeSpace) / 1GB, 2)
+        FreePercent  = [math]::Round(($disk.FreeSpace / $disk.Size) * 100, 2)
 
     }
 
 }
 
+
+
 function Get-NetworkInfo {
 
     param(
-        [Parameter(Mandatory)]
         [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
-    $adapter = Get-CimInstance `
-        Win32_NetworkAdapterConfiguration `
-        -CimSession $CimSession |
-        Where-Object IPEnabled |
+    if ($CimSession) {
+
+        $adapter = Get-CimInstance `
+            Win32_NetworkAdapterConfiguration `
+            -CimSession $CimSession
+
+    }
+    else {
+
+        $adapter = Get-CimInstance `
+            Win32_NetworkAdapterConfiguration
+
+    }
+
+    $adapter = $adapter |
+        Where-Object { $_.IPEnabled } |
         Select-Object -First 1
+
+        if (-not $adapter) {
+            throw "No se encontró un adaptador de red con IP habilitada."
+        }
 
     [PSCustomObject]@{
 
         IPv4 = ($adapter.IPAddress |
-            Where-Object {$_ -match '^\d+\.'} |
+            Where-Object { $_ -match '^\d+\.' } |
             Select-Object -First 1)
 
         MAC = $adapter.MACAddress
@@ -108,38 +143,50 @@ function Get-NetworkInfo {
 function Get-SecurityInfo {
 
     param(
-        [Parameter(Mandatory)]
         [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
-    $Computer = $CimSession.ComputerName
+    if ($CimSession) {
 
-    $BitLocker = Invoke-Command -ComputerName $Computer {
+        $Computer = $CimSession.ComputerName
 
-        try{
+        $BitLocker = Invoke-Command -ComputerName $Computer -ScriptBlock {
 
-            (Get-BitLockerVolume -MountPoint "C:").ProtectionStatus
+            try {
+                (Get-BitLockerVolume -MountPoint "C:").ProtectionStatus
+            }
+            catch {
+                $null
+            }
 
         }
-        catch{
 
-            $null
+        $Defender = Invoke-Command -ComputerName $Computer -ScriptBlock {
+
+            try {
+                (Get-MpComputerStatus).AntivirusEnabled
+            }
+            catch {
+                $null
+            }
 
         }
 
     }
+    else {
 
-    $Defender = Invoke-Command -ComputerName $Computer {
-
-        try{
-
-            (Get-MpComputerStatus).AntivirusEnabled
-
+        try {
+            $BitLocker = (Get-BitLockerVolume -MountPoint "C:").ProtectionStatus
         }
-        catch{
+        catch {
+            $BitLocker = $null
+        }
 
-            $null
-
+        try {
+            $Defender = (Get-MpComputerStatus).AntivirusEnabled
+        }
+        catch {
+            $Defender = $null
         }
 
     }
@@ -147,13 +194,11 @@ function Get-SecurityInfo {
     [PSCustomObject]@{
 
         BitLocker = $BitLocker
-
-        Defender = $Defender
+        Defender  = $Defender
 
     }
 
 }
-
 
 
 
@@ -231,45 +276,55 @@ $OnlineComputers = @(
 
 $Results = @()
 
+if (!(Test-Path ".\Reports")) {
+
+    New-Item `
+        -ItemType Directory `
+        -Path ".\Reports" | Out-Null
+
+}
+
 foreach ($Computer in $OnlineComputers) {
 
     $Session = $null
 
     try {
 
-        $Session = New-CimSession -ComputerName $Computer
+        if ($Computer -eq $env:COMPUTERNAME -or
+            $Computer -eq "localhost") {
 
-        $Results += Get-ComputerInventory -CimSession $Session
+            # Equipo local (no necesita WinRM)
+            $Results += Get-ComputerInventory
+
+        }
+        else {
+
+            # Equipo remoto
+            $Session = New-CimSession -ComputerName $Computer
+
+            $Results += Get-ComputerInventory -CimSession $Session
+
+        }
 
         Write-Host "[OK] $Computer" -ForegroundColor Green
 
     }
     catch {
 
-       Write-Warning "[ERROR] $Computer : $($_.Exception.Message)"
+        Write-Warning "[ERROR] $Computer : $($_.Exception.Message)"
 
         Add-Content `
-        ".\Reports\Errors.log" `
-        "$(Get-Date) - $Computer - $($_.Exception.Message)"
-        
+            -Path ".\Reports\Errors.log" `
+            -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Computer - $($_.Exception.Message)"
 
     }
     finally {
 
         if ($Session) {
-            Remove-CimSession $Session
+            Remove-CimSession -CimSession $Session
         }
 
     }
-
-}
-
-
-if (!(Test-Path ".\Reports")) {
-
-    New-Item `
-        -ItemType Directory `
-        -Path ".\Reports" | Out-Null
 
 }
 
