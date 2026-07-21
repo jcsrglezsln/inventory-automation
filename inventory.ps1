@@ -219,8 +219,7 @@ function Get-ComputerInventory {
         PSCustomObject
     #>
 
-    param(
-        [Parameter(Mandatory)]
+     param(
         [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
